@@ -1,0 +1,92 @@
+name: Build Triton image with Dragonfly agent
+
+# Layers a released dragonfly repoagent .so onto the matching Triton base image and
+# pushes the result to GHCR. The .so comes from this repo's Releases (produced by
+# build-agent.yml); pick the Triton version to match an existing v<version>-py3 tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      triton_version:
+        description: "Triton NGC version (YY.MM), must have a matching v<version>-py3 release"
+        required: true
+        default: "26.06"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Resolve names
+        id: meta
+        run: |
+          V="${{ github.event.inputs.triton_version }}"
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          SO_URL="https://github.com/${{ github.repository }}/releases/download/v${V}-py3/libtritonrepoagent_dragonfly-${V}-py3.so"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "so_url=$SO_URL" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${OWNER}/tritonserver-dragonfly:${V}-py3" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the release asset exists
+        run: |
+          if ! curl -sfIL "${{ steps.meta.outputs.so_url }}" >/dev/null; then
+            echo "::error::Release asset not found: ${{ steps.meta.outputs.so_url }}"
+            echo "Run build-agent.yml for ${{ steps.meta.outputs.version }} first."
+            exit 1
+          fi
+
+      # The Triton base is ~20 GB unpacked; default runner free space (~14 GB) is not
+      # enough. Reclaim space from preinstalled toolchains before building.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /opt/hostedtoolcache
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: Generate Dockerfile
+        run: |
+          cat > Dockerfile.runtime <<EOF
+          FROM nvcr.io/nvidia/tritonserver:${{ steps.meta.outputs.version }}-py3
+          RUN mkdir -p /opt/tritonserver/repoagents/dragonfly
+          ADD ${{ steps.meta.outputs.so_url }} /opt/tritonserver/repoagents/dragonfly/libtritonrepoagent_dragonfly.so
+          RUN chmod 644 /opt/tritonserver/repoagents/dragonfly/libtritonrepoagent_dragonfly.so
+          EOF
+          cat Dockerfile.runtime
+
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build & push ${{ steps.meta.outputs.image }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.runtime
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed \`${{ steps.meta.outputs.image }}\`"
+            echo
+            echo "Run it:"
+            echo '```bash'
+            echo "docker run --rm --gpus all -p8000-8002:8000-8002 \\"
+            echo "  -v /path/to/model_repository:/models \\"
+            echo "  ${{ steps.meta.outputs.image }} \\"
+            echo "  tritonserver --model-repository=/models"
+            echo '```'
+            echo
+            echo "Enable per-model in \`config.pbtxt\`:"
+            echo '```'
+            echo 'model_repository_agents { agents [ { name: "dragonfly" } ] }'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
