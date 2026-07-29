@@ -35,6 +35,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
+      # Build+cache the vcpkg deps stage on its own. This step succeeds independently
+      # of the agent compile, so its cache is exported even when a later compile fails
+      # (build-push-action only exports cache on success). Result: the ~45 min vcpkg
+      # build happens once; every retry restores it and only recompiles the agent.
+      - name: Build & cache vcpkg deps for Triton ${{ steps.meta.outputs.version }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: deps
+          load: false
+          cache-from: type=gha,scope=deps-${{ steps.meta.outputs.version }}
+          cache-to: type=gha,mode=max,scope=deps-${{ steps.meta.outputs.version }}
+
       - name: Build agent .so (Dockerfile builder stage) for Triton ${{ steps.meta.outputs.version }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -44,10 +57,12 @@ jobs:
           tags: dragonfly-agent-builder:${{ steps.meta.outputs.version }}
           build-args: |
             TRITON_VERSION=${{ steps.meta.outputs.version }}
-          # GHA layer cache: the vcpkg install layers are reused across runs, so a
-          # re-run after a later-stage failure is minutes, not ~2 hours.
-          cache-from: type=gha,scope=triton-${{ steps.meta.outputs.version }}
-          cache-to: type=gha,mode=max,scope=triton-${{ steps.meta.outputs.version }}
+          # Restore deps from the step above; keep a builder-scope cache for the
+          # incremental compile layers too.
+          cache-from: |
+            type=gha,scope=deps-${{ steps.meta.outputs.version }}
+            type=gha,scope=builder-${{ steps.meta.outputs.version }}
+          cache-to: type=gha,mode=max,scope=builder-${{ steps.meta.outputs.version }}
 
       - name: Extract the .so
         run: |

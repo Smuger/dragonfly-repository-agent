@@ -6,12 +6,14 @@ ARG TRITON_VERSION=26.06
 #   --build-arg BASE_IMAGE=597088022503.dkr.ecr.us-west-2.amazonaws.com/skopeo/nvidia/tritonserver:26.06-py3
 ARG BASE_IMAGE=nvcr.io/nvidia/tritonserver:${TRITON_VERSION}-py3
 
+# deps: the expensive, slow-changing layer (vcpkg builds ~45 min). Kept as its own
+# stage so CI can build+cache it in a step that succeeds independently of the agent
+# compile, so a failing compile never forces a cold vcpkg rebuild on the next try.
+#
 # Pinned, not :latest. ubuntu:latest tracks a dev release (gcc-15) whose stricter
 # headers break azure-storage-common-cpp ('uint8_t' not declared). 24.04 (gcc-13)
 # compiles the vcpkg ports cleanly.
-FROM ubuntu:24.04 AS builder
-
-ARG TRITON_VERSION
+FROM ubuntu:24.04 AS deps
 
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -38,6 +40,22 @@ RUN /vcpkg/vcpkg install google-cloud-cpp[storage]
 RUN /vcpkg/vcpkg install azure-storage-blobs-cpp
 RUN /vcpkg/vcpkg install rapidjson
 
+# Triton core/common r${TRITON_VERSION} require CMake >= 3.31.8; 24.04's apt cmake
+# is 3.28. Install a newer one into /usr/local (precedes /usr/bin on PATH). Placed
+# after the vcpkg installs so it never invalidates those (expensive) cache layers.
+RUN CMAKE_VERSION=3.31.8 \
+    && curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz" \
+       | tar xz --strip-components=1 -C /usr/local \
+    && cmake --version
+
+ENV VCPKG_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+# builder: the fast, frequently-changing layer. FROM deps so it reuses the cached
+# vcpkg build and only recompiles the agent (~1-2 min).
+FROM deps AS builder
+
+ARG TRITON_VERSION
+
 RUN mkdir -p /dragonfly-repository-agent/build
 
 COPY ./src /dragonfly-repository-agent/src
@@ -45,8 +63,6 @@ COPY ./cmake /dragonfly-repository-agent/cmake
 COPY ./CMakeLists.txt /dragonfly-repository-agent/CMakeLists.txt
 
 WORKDIR /dragonfly-repository-agent/build
-
-ENV VCPKG_TOOLCHAIN_FILE=/vcpkg/scripts/buildsystems/vcpkg.cmake
 
 # Pin triton core/common to the release branch matching the runtime (rYY.MM).
 RUN cmake -DCMAKE_TOOLCHAIN_FILE=${VCPKG_TOOLCHAIN_FILE} \
