@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y \
 RUN git clone https://github.com/Microsoft/vcpkg.git /vcpkg \
     && /vcpkg/bootstrap-vcpkg.sh
 
+# Release-only triplet overlay: skips the failing debug build (and halves build time).
+COPY ./triplets /vcpkg-triplets
+ENV VCPKG_OVERLAY_TRIPLETS=/vcpkg-triplets
+
 RUN /vcpkg/vcpkg install re2
 RUN /vcpkg/vcpkg install grpc
 RUN /vcpkg/vcpkg install aws-sdk-cpp

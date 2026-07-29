@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve names
         id: meta
@@ -32,11 +32,22 @@ jobs:
           echo "tag=v${V}-py3" >> "$GITHUB_OUTPUT"
           echo "asset=libtritonrepoagent_dragonfly-${V}-py3.so" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
       - name: Build agent .so (Dockerfile builder stage) for Triton ${{ steps.meta.outputs.version }}
-        run: |
-          docker build --target builder \
-            --build-arg TRITON_VERSION="${{ steps.meta.outputs.version }}" \
-            -t dragonfly-agent-builder:"${{ steps.meta.outputs.version }}" .
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: builder
+          load: true
+          tags: dragonfly-agent-builder:${{ steps.meta.outputs.version }}
+          build-args: |
+            TRITON_VERSION=${{ steps.meta.outputs.version }}
+          # GHA layer cache: the vcpkg install layers are reused across runs, so a
+          # re-run after a later-stage failure is minutes, not ~2 hours.
+          cache-from: type=gha,scope=triton-${{ steps.meta.outputs.version }}
+          cache-to: type=gha,mode=max,scope=triton-${{ steps.meta.outputs.version }}
 
       - name: Extract the .so
         run: |
@@ -46,7 +57,7 @@ jobs:
           ls -lh "${{ steps.meta.outputs.asset }}"
 
       - name: Publish to Releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
