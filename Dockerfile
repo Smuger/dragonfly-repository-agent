@@ -6,7 +6,10 @@ ARG TRITON_VERSION=26.06
 #   --build-arg BASE_IMAGE=597088022503.dkr.ecr.us-west-2.amazonaws.com/skopeo/nvidia/tritonserver:26.06-py3
 ARG BASE_IMAGE=nvcr.io/nvidia/tritonserver:${TRITON_VERSION}-py3
 
-FROM ubuntu:latest AS builder
+# Pinned, not :latest. ubuntu:latest tracks a dev release (gcc-15) whose stricter
+# headers break azure-storage-common-cpp ('uint8_t' not declared). 24.04 (gcc-13)
+# compiles the vcpkg ports cleanly.
+FROM ubuntu:24.04 AS builder
 
 ARG TRITON_VERSION
 
