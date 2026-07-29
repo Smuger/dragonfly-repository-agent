@@ -1,0 +1,69 @@
+name: Build Dragonfly Triton Agent
+
+# Compiles the Dragonfly Triton repository agent (.so) for an arbitrary Triton
+# version and publishes it to Releases. Re-run with a new triton_version to get
+# the agent for that release: it fetches triton core/common r<version> and builds
+# the plugin against it. Only the Dockerfile `builder` stage runs here, so there
+# is no multi-GB Triton base pull and no NGC auth needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      triton_version:
+        description: "Triton NGC version (YY.MM), e.g. 26.06"
+        required: true
+        default: "26.06"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve names
+        id: meta
+        run: |
+          V="${{ github.event.inputs.triton_version }}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v${V}-py3" >> "$GITHUB_OUTPUT"
+          echo "asset=libtritonrepoagent_dragonfly-${V}-py3.so" >> "$GITHUB_OUTPUT"
+
+      - name: Build agent .so (Dockerfile builder stage) for Triton ${{ steps.meta.outputs.version }}
+        run: |
+          docker build --target builder \
+            --build-arg TRITON_VERSION="${{ steps.meta.outputs.version }}" \
+            -t dragonfly-agent-builder:"${{ steps.meta.outputs.version }}" .
+
+      - name: Extract the .so
+        run: |
+          cid=$(docker create dragonfly-agent-builder:"${{ steps.meta.outputs.version }}")
+          docker cp "$cid:/dragonfly-repository-agent/build/libtritonrepoagent_dragonfly.so" "${{ steps.meta.outputs.asset }}"
+          docker rm "$cid"
+          ls -lh "${{ steps.meta.outputs.asset }}"
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body: |
+            Dragonfly Triton repository agent compiled against Triton ${{ steps.meta.outputs.version }} (core/common `r${{ steps.meta.outputs.version }}`).
+
+            Layer it onto the matching Triton image:
+
+            ```dockerfile
+            FROM nvcr.io/nvidia/tritonserver:${{ steps.meta.outputs.version }}-py3
+            RUN mkdir -p /opt/tritonserver/repoagents/dragonfly
+            COPY ${{ steps.meta.outputs.asset }} /opt/tritonserver/repoagents/dragonfly/libtritonrepoagent_dragonfly.so
+            ```
+
+            Then add to the model's `config.pbtxt`:
+
+            ```
+            model_repository_agents { agents [ { name: "dragonfly" } ] }
+            ```
+          files: ${{ steps.meta.outputs.asset }}
