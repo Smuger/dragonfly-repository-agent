@@ -29,7 +29,7 @@ jobs:
           SO_URL="https://github.com/${{ github.repository }}/releases/download/v${V}-py3/libtritonrepoagent_dragonfly-${V}-py3.so"
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "so_url=$SO_URL" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${OWNER}/tritonserver-dragonfly:${V}-py3-dragonfly" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${OWNER}/tritonserver-dragonfly:${V}-py3" >> "$GITHUB_OUTPUT"
 
       - name: Verify the release asset exists
         run: |
