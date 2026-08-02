@@ -5,11 +5,6 @@ name: build-dragonfly-hook
 
 on:
   workflow_dispatch:
-    inputs:
-      triton_version:
-        description: "Triton core/common branch to compile against (YY.MM)"
-        required: true
-        default: "26.07"
 
 permissions:
   contents: write
@@ -42,7 +37,7 @@ jobs:
           load: true
           tags: dragonfly-hook-builder:latest
           build-args: |
-            TRITON_VERSION=${{ github.event.inputs.triton_version }}
+            TRITON_VERSION=26.07
           cache-from: |
             type=gha,scope=deps
             type=gha,scope=builder
