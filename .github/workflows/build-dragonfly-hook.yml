@@ -1,0 +1,63 @@
+name: build-dragonfly-hook
+
+# Builds the Dragonfly Triton repo-agent hook (.so) and publishes it to Releases.
+# One .so works across Triton versions/flavors (stable repoagent ABI).
+
+on:
+  workflow_dispatch:
+    inputs:
+      triton_version:
+        description: "Triton core/common branch to compile against (YY.MM)"
+        required: true
+        default: "26.07"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # deps stage caches on its own so a failed compile never forces a cold vcpkg rebuild.
+      - name: Build & cache vcpkg deps
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: deps
+          load: false
+          cache-from: type=gha,scope=deps
+          cache-to: type=gha,mode=max,scope=deps
+
+      - name: Build hook (.so)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: builder
+          load: true
+          tags: dragonfly-hook-builder:latest
+          build-args: |
+            TRITON_VERSION=${{ github.event.inputs.triton_version }}
+          cache-from: |
+            type=gha,scope=deps
+            type=gha,scope=builder
+          cache-to: type=gha,mode=max,scope=builder
+
+      - name: Extract libtritonrepoagent_dragonfly.so
+        run: |
+          cid=$(docker create dragonfly-hook-builder:latest)
+          docker cp "$cid:/dragonfly-repository-agent/build/libtritonrepoagent_dragonfly.so" libtritonrepoagent_dragonfly.so
+          docker rm "$cid"
+          ls -lh libtritonrepoagent_dragonfly.so
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: dragonfly-hook
+          name: dragonfly-hook
+          files: libtritonrepoagent_dragonfly.so

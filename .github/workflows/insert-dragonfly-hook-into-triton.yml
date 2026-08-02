@@ -1,16 +1,15 @@
-name: Build Triton image with Dragonfly agent
+name: insert-dragonfly-hook-into-triton
 
-# Layers a released dragonfly repoagent .so onto the matching Triton base image and
-# pushes the result to GHCR. The .so comes from this repo's Releases (produced by
-# build-agent.yml); pick the Triton version to match an existing v<version>-py3 tag.
+# Layers the released dragonfly hook (.so) onto any Triton base tag and pushes to GHCR.
+# The .so is the fixed `dragonfly-hook` release asset (produced by build-dragonfly-hook.yml).
 
 on:
   workflow_dispatch:
     inputs:
-      triton_version:
-        description: "Triton NGC version (YY.MM), must have a matching v<version>-py3 release"
+      triton_tag:
+        description: "Full Triton image tag, e.g. 26.07-py3 or 26.07-trtllm-python-py3"
         required: true
-        default: "26.06"
+        default: "26.07-py3"
 
 permissions:
   contents: read
@@ -24,23 +23,22 @@ jobs:
       - name: Resolve names
         id: meta
         run: |
-          V="${{ github.event.inputs.triton_version }}"
+          TAG="${{ github.event.inputs.triton_tag }}"
           OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          SO_URL="https://github.com/${{ github.repository }}/releases/download/v${V}-py3/libtritonrepoagent_dragonfly-${V}-py3.so"
-          echo "version=$V" >> "$GITHUB_OUTPUT"
+          SO_URL="https://github.com/${{ github.repository }}/releases/download/dragonfly-hook/libtritonrepoagent_dragonfly.so"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "so_url=$SO_URL" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${OWNER}/tritonserver-dragonfly:${V}-py3" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${OWNER}/tritonserver-dragonfly:${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify the release asset exists
+      - name: Verify the hook asset exists
         run: |
           if ! curl -sfIL "${{ steps.meta.outputs.so_url }}" >/dev/null; then
-            echo "::error::Release asset not found: ${{ steps.meta.outputs.so_url }}"
-            echo "Run build-agent.yml for ${{ steps.meta.outputs.version }} first."
+            echo "::error::Hook asset not found: ${{ steps.meta.outputs.so_url }}"
+            echo "Run build-dragonfly-hook.yml first."
             exit 1
           fi
 
-      # The Triton base is ~20 GB unpacked; default runner free space (~14 GB) is not
-      # enough. Reclaim space from preinstalled toolchains before building.
+      # Triton base is ~20 GB unpacked; default runner free space (~14 GB) is not enough.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
@@ -51,7 +49,7 @@ jobs:
       - name: Generate Dockerfile
         run: |
           cat > Dockerfile.runtime <<EOF
-          FROM nvcr.io/nvidia/tritonserver:${{ steps.meta.outputs.version }}-py3
+          FROM nvcr.io/nvidia/tritonserver:${{ steps.meta.outputs.tag }}
           RUN mkdir -p /opt/tritonserver/repoagents/dragonfly
           ADD ${{ steps.meta.outputs.so_url }} /opt/tritonserver/repoagents/dragonfly/libtritonrepoagent_dragonfly.so
           RUN chmod 644 /opt/tritonserver/repoagents/dragonfly/libtritonrepoagent_dragonfly.so
